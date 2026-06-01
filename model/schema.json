@@ -1,0 +1,19 @@
+{
+  "model_version": "1.0.0",
+  "feature_names": [
+    "fixed acidity",
+    "volatile acidity",
+    "citric acid",
+    "residual sugar",
+    "chlorides",
+    "free sulfur dioxide",
+    "total sulfur dioxide",
+    "density",
+    "pH",
+    "sulphates",
+    "alcohol"
+  ],
+  "feature_count": 11,
+  "target": "good_wine",
+  "threshold": 7
+}

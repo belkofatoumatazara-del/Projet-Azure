@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# Secrets / local config (NEVER commit)
+.env
+local.settings.json
+*.publishsettings
+
+# Azure Functions local
+bin/
+obj/
+
+# Build-time copy of the model (canonical artifact lives in model/)
+api/model_v*.pkl
+
+# OS
+.DS_Store
