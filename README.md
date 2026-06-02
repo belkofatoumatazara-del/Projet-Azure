@@ -42,7 +42,7 @@ to Application Insights.
 
 - **Dataset:** UCI Wine Quality (red), ~1,599 rows, 11 numeric physicochemical
   features. Open source, < 100 MB.
-- **Task:** binary classification — *good wine* = `quality >= 7`. Binary lets the
+- **Task:** binary classification *good wine* = `quality >= 7`. Binary lets the
   model return a natural confidence score via `predict_proba`.
 - **Model:** `RandomForestClassifier` (`class_weight="balanced"` — the dataset is
   imbalanced, ~13.6% positive), exported as `model_v1.0.0.pkl`.
