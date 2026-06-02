@@ -259,5 +259,5 @@ The subscription's policies forced several defensible design decisions:
   workflow is authored and correct but cannot run live (no `AZURE_CREDENTIALS`).
   CI runs fully.
 - **Static Web Apps regions** don't overlap the allowed list, so the dashboard is
-  served from the Function App (`/api/dashboard`) instead — same learning outcome,
+  served from the Function App (`/api/dashboard`) instead same learning outcome,
   no extra resource, no CORS.
