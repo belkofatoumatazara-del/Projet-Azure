@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "<storage-account-connection-string>",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "API_URL": "https://wine-api.<env-domain>.germanywestcentral.azurecontainerapps.io",
+    "COSMOS_CONNECTION": "<cosmos-db-connection-string>",
+    "COSMOS_DB": "mlpipe",
+    "COSMOS_CONTAINER": "inferences",
+    "MAX_FILE_BYTES": "10485760"
+  }
+}

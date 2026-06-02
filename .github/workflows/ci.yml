@@ -28,8 +28,7 @@ jobs:
       - name: Run API unit tests
         run: |
           cp model/model_v1.0.0.pkl api/
-          cd api
-          MODEL_PATH=model_v1.0.0.pkl pytest -q
+          cd api && MODEL_PATH=model_v1.0.0.pkl pytest -q
 
   docker-build:
     runs-on: ubuntu-latest

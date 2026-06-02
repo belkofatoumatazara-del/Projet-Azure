@@ -1,9 +1,3 @@
-# NOTE: This CD workflow is complete and correct, but cannot run live in this
-# project because the INSEEC/POCE Azure tenant blocks students from registering
-# service principals (az ad sp create-for-rbac -> "Insufficient privileges").
-# Without a service principal there is no AZURE_CREDENTIALS secret for azure/login.
-# CI (ci.yml) runs fully; CD is documented here as the intended automated path.
-#
 name: CD
 
 on:
