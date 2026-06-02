@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Wine Quality — Inference Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1117; --card: #1a1d27; --line: #2a2e3b;
+    --text: #e6e8ee; --muted: #9aa0ad; --accent: #7c5cff;
+    --good: #34d399; --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 32px 24px; max-width: 1000px; margin: 0 auto;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 22px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  .status { font-size: 12px; color: var(--muted); }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin: 22px 0; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .card .value { font-size: 26px; font-weight: 650; margin-top: 6px; }
+  .panel { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 18px; }
+  .panel h2 { font-size: 14px; font-weight: 600; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; }
+  td.mono { font-variant-numeric: tabular-nums; }
+  .pill { padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.good { background: rgba(52,211,153,.15); color: var(--good); }
+  .pill.bad { background: rgba(248,113,113,.15); color: var(--bad); }
+  button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 8px 14px; font-size: 13px; cursor: pointer; }
+  button:hover { opacity: .9; }
+  .empty { color: var(--muted); text-align: center; padding: 30px; }
+</style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Wine Quality — Inference Dashboard</h1>
+      <div class="sub">Live results from the event-driven ML pipeline · Cosmos DB</div>
+    </div>
+    <div style="text-align:right">
+      <button onclick="load()">Refresh</button>
+      <div class="status" id="status">loading…</div>
+    </div>
+  </header>
+
+  <div class="cards">
+    <div class="card"><div class="label">Inferences shown</div><div class="value" id="m-count">—</div></div>
+    <div class="card"><div class="label">Avg confidence</div><div class="value" id="m-conf">—</div></div>
+    <div class="card"><div class="label">Avg latency</div><div class="value" id="m-lat">—</div></div>
+    <div class="card"><div class="label">Model version</div><div class="value" id="m-ver">—</div></div>
+  </div>
+
+  <div class="panel">
+    <h2>Prediction distribution</h2>
+    <canvas id="chart" height="90"></canvas>
+  </div>
+
+  <div class="panel">
+    <h2>Latest inferences</h2>
+    <table>
+      <thead><tr>
+        <th>File</th><th>Row</th><th>Prediction</th><th>Confidence</th><th>Latency</th><th>Time (UTC)</th>
+      </tr></thead>
+      <tbody id="rows"><tr><td colspan="6" class="empty">Loading…</td></tr></tbody>
+    </table>
+  </div>
+
+<script>
+let chart;
+async function load() {
+  const status = document.getElementById('status');
+  try {
+    const res = await fetch('/api/recent', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    render(data);
+    status.textContent = 'updated ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    status.textContent = 'error: ' + e.message;
+  }
+}
+
+function render(items) {
+  const rows = document.getElementById('rows');
+  if (!items.length) {
+    rows.innerHTML = '<tr><td colspan="6" class="empty">No inferences yet — upload a CSV to the input/ container.</td></tr>';
+    return;
+  }
+  // Stat cards
+  const conf = items.reduce((s, x) => s + (x.confidence || 0), 0) / items.length;
+  const lat = items.reduce((s, x) => s + (x.duration_ms || 0), 0) / items.length;
+  document.getElementById('m-count').textContent = items.length;
+  document.getElementById('m-conf').textContent = (conf * 100).toFixed(1) + '%';
+  document.getElementById('m-lat').textContent = Math.round(lat) + ' ms';
+  document.getElementById('m-ver').textContent = items[0].model_version || '—';
+
+  // Table
+  rows.innerHTML = items.map(x => {
+    const good = x.label === 'good';
+    return `<tr>
+      <td>${x.file_name}</td>
+      <td class="mono">${x.row_index}</td>
+      <td><span class="pill ${good ? 'good' : 'bad'}">${x.label}</span></td>
+      <td class="mono">${((x.confidence || 0) * 100).toFixed(1)}%</td>
+      <td class="mono">${Math.round(x.duration_ms || 0)} ms</td>
+      <td class="mono">${(x.timestamp || '').replace('T', ' ').slice(0, 19)}</td>
+    </tr>`;
+  }).join('');
+
+  // Chart: count of good vs not_good
+  const good = items.filter(x => x.label === 'good').length;
+  const bad = items.length - good;
+  const cfg = {
+    type: 'bar',
+    data: { labels: ['good', 'not_good'], datasets: [{ data: [good, bad],
+      backgroundColor: ['#34d399', '#f87171'], borderRadius: 6 }] },
+    options: { plugins: { legend: { display: false } },
+      scales: { x: { grid: { display: false }, ticks: { color: '#9aa0ad' } },
+        y: { beginAtZero: true, ticks: { precision: 0, color: '#9aa0ad' }, grid: { color: '#2a2e3b' } } } }
+  };
+  if (chart) { chart.data = cfg.data; chart.update(); }
+  else { chart = new Chart(document.getElementById('chart'), cfg); }
+}
+
+load();
+setInterval(load, 15000);  // auto-refresh every 15s
+</script>
+</body>
+</html>
