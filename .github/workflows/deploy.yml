@@ -1,0 +1,98 @@
+# NOTE: This CD workflow is complete and correct, but cannot run live in this
+# project because the INSEEC/POCE Azure tenant blocks students from registering
+# service principals (az ad sp create-for-rbac -> "Insufficient privileges").
+# Without a service principal there is no AZURE_CREDENTIALS secret for azure/login.
+# CI (ci.yml) runs fully; CD is documented here as the intended automated path.
+#
+name: CD
+
+on:
+  push:
+    branches: [main]
+
+env:
+  RG: rg-mlpipe-dev
+  ACR_NAME: acrwinefb2026
+  CONTAINERAPP: wine-api
+  FUNCAPP: func-mlpipe-fb2026
+  IMAGE: wine-api
+
+jobs:
+  # 1) Build the image on the runner (native amd64) and push to ACR.
+  build-push:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Compute image tag
+        id: meta
+        run: echo "tag=${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push image to ACR
+        run: |
+          cp model/model_v1.0.0.pkl api/
+          az acr login --name "$ACR_NAME"
+          docker build -t "$ACR_NAME.azurecr.io/$IMAGE:${{ steps.meta.outputs.tag }}" \
+                       -t "$ACR_NAME.azurecr.io/$IMAGE:latest" ./api
+          docker push "$ACR_NAME.azurecr.io/$IMAGE:${{ steps.meta.outputs.tag }}"
+          docker push "$ACR_NAME.azurecr.io/$IMAGE:latest"
+
+  # 2) Staging: deploy the new image + the Functions automatically.
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: build-push
+    environment: staging
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Update Container App to new image
+        run: |
+          az containerapp update --name "$CONTAINERAPP" --resource-group "$RG" \
+            --image "$ACR_NAME.azurecr.io/$IMAGE:${{ needs.build-push.outputs.tag }}"
+
+      - name: Deploy Functions
+        run: |
+          npm i -g azure-functions-core-tools@4 --unsafe-perm true
+          cd functions
+          func azure functionapp publish "$FUNCAPP" --build remote --python
+
+  # 3) Prod: requires manual approval (configured on the 'prod' environment),
+  #    then runs acceptance smoke tests against the live endpoints.
+  deploy-prod:
+    runs-on: ubuntu-latest
+    needs: deploy-staging
+    environment: prod
+    steps:
+      - name: Azure login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Resolve live API URL
+        id: url
+        run: |
+          FQDN=$(az containerapp show -n "$CONTAINERAPP" -g "$RG" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "api=https://$FQDN" >> "$GITHUB_OUTPUT"
+
+      - name: Smoke test /health and /predict
+        run: |
+          API="${{ steps.url.outputs.api }}"
+          echo "Testing $API"
+          curl -fsS "$API/health" | grep -q '"status":"OK"'
+          curl -fsS -X POST "$API/predict" -H "Content-Type: application/json" \
+            -d '{"fixed_acidity":7.4,"volatile_acidity":0.35,"citric_acid":0.4,"residual_sugar":2.0,"chlorides":0.07,"free_sulfur_dioxide":15.0,"total_sulfur_dioxide":40.0,"density":0.9968,"pH":3.3,"sulphates":0.7,"alcohol":12.5}' \
+            | grep -q '"label"'
+          echo "Production smoke tests passed."
