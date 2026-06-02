@@ -3,9 +3,9 @@
 An end-to-end, event-driven, serverless ML inference pipeline on Microsoft Azure,
 built within the Azure for Students credit limit. A CSV uploaded to Blob Storage
 is automatically validated, queued, scored by a containerised ML API, persisted
-to Cosmos DB, and surfaced on a live dashboard — with full observability and CI/CD.
+to Cosmos DB, and surfaced on a live dashboard with full observability and CI/CD.
 
-> ECE Paris — 5th year — *Distributed Systems and AI* integrative project.
+> ECE Paris MSc 2 AI *Distributed Systems and AI* integrative project.
 
 ---
 
