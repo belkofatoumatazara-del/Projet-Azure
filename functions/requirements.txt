@@ -1,4 +1,6 @@
+# Azure Functions Python worker resolves these via remote build on deploy.
 azure-functions==1.21.3
 azure-storage-blob==12.24.0
 azure-cosmos==4.9.0
 requests==2.32.3
+azure-monitor-opentelemetry-exporter>=1.0.0b25

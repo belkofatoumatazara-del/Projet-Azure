@@ -28,7 +28,9 @@ import json
 import logging
 import os
 import time
+from collections import defaultdict, deque
 from datetime import datetime, timezone
+from pathlib import Path
 
 import azure.functions as func
 import requests
@@ -94,6 +96,70 @@ def _safe_id(name: str) -> str:
     for ch in "/\\?#":
         name = name.replace(ch, "_")
     return name
+
+
+# --- Observability: custom metrics via OpenTelemetry -> Application Insights ---
+# Three custom metrics required by the spec:
+#   inference_count   (counter)   - number of inferences performed
+#   model_latency_ms  (histogram) - end-to-end inference latency
+#   api_error_count   (counter)   - failed calls to the inference API
+# Initialised once per worker process; imports are inside the function so a
+# missing package can never break function indexing/deployment.
+_otel_ready = False
+_instr: dict = {}
+
+
+def _ensure_metrics() -> None:
+    global _otel_ready
+    if _otel_ready:
+        return
+    conn = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
+    if not conn:
+        return
+    try:
+        # Metrics-only setup: a dedicated MeterProvider with the Azure Monitor
+        # metric exporter. This does NOT touch the worker's logging/tracing or
+        # trace-context propagation, so it can't interfere with the host.
+        from azure.monitor.opentelemetry.exporter import AzureMonitorMetricExporter
+        from opentelemetry import metrics
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+        exporter = AzureMonitorMetricExporter.from_connection_string(conn)
+        reader = PeriodicExportingMetricReader(exporter, export_interval_millis=15000)
+        metrics.set_meter_provider(MeterProvider(metric_readers=[reader]))
+        meter = metrics.get_meter("mlpipe.worker")
+        _instr["inferences"] = meter.create_counter(
+            "inference_count", unit="1", description="Number of inferences performed")
+        _instr["latency"] = meter.create_histogram(
+            "model_latency_ms", unit="ms", description="End-to-end inference latency")
+        _instr["errors"] = meter.create_counter(
+            "api_error_count", unit="1", description="Inference API errors")
+        _otel_ready = True
+        logging.info("OpenTelemetry custom metrics initialised")
+    except Exception as exc:  # noqa: BLE001
+        logging.error("Could not initialise OTel metrics: %s", exc)
+
+
+def _record_inference(latency_ms: float, label: str) -> None:
+    if "inferences" in _instr:
+        _instr["inferences"].add(1, {"label": label})
+        _instr["latency"].record(latency_ms)
+
+
+def _record_api_error() -> None:
+    if "errors" in _instr:
+        _instr["errors"].add(1)
+
+
+def _flush_metrics() -> None:
+    # On Consumption the worker may idle/stop between invocations, so force an
+    # export at the end of each run to make sure the metrics actually ship.
+    try:
+        from opentelemetry import metrics
+        metrics.get_meter_provider().force_flush(timeout_millis=5000)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _move_to_rejected(blob_name: str, reason: str) -> None:
@@ -176,6 +242,7 @@ def worker(msg: func.QueueMessage) -> None:
     if not API_URL:
         raise RuntimeError("API_URL is not configured")
 
+    _ensure_metrics()
     bs = blob_service()
     text = bs.get_blob_client("input", blob_name).download_blob().readall().decode("utf-8-sig")
     reader = csv.DictReader(io.StringIO(text))
@@ -189,10 +256,18 @@ def worker(msg: func.QueueMessage) -> None:
         payload = {col.replace(" ", "_"): float(row[col]) for col in REQUIRED_COLUMNS}
 
         t0 = time.perf_counter()
-        resp = _session().post(f"{API_URL}/predict", json=payload, timeout=60)
-        resp.raise_for_status()  # non-2xx -> exception -> retry -> poison queue
+        try:
+            resp = _session().post(f"{API_URL}/predict", json=payload, timeout=60)
+            resp.raise_for_status()
+        except Exception:
+            _record_api_error()           # custom metric: api_error_count
+            _flush_metrics()
+            raise                          # -> retry -> poison queue (DLQ)
         out = resp.json()
         duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+
+        # custom metrics: inference_count + model_latency_ms
+        _record_inference(duration_ms, out["label"])
 
         record = {
             "id": f"{_safe_id(blob_name)}-{i}",   # deterministic -> idempotent
@@ -218,3 +293,59 @@ def worker(msg: func.QueueMessage) -> None:
         overwrite=True,
     )
     logging.info("Wrote %d result(s) to output/%s", len(results), out_name)
+    _flush_metrics()
+
+
+# --- Dashboard API (HTTP triggers) --------------------------------------------
+# A Static Web App could not be used (its regions aren't in this subscription's
+# allowed list), so the dashboard is served from the Function App instead:
+#   GET /api/recent     -> 20 most recent inferences from Cosmos (JSON)
+#   GET /api/dashboard  -> the dashboard HTML page
+# Anonymous auth + a simple in-process rate limit of 60 requests/min per IP.
+
+_RL_MAX = 60
+_RL_WINDOW = 60.0
+_rl_hits: dict = defaultdict(deque)
+
+
+def _rate_ok(ip: str) -> bool:
+    now = time.time()
+    q = _rl_hits[ip]
+    while q and now - q[0] > _RL_WINDOW:
+        q.popleft()
+    if len(q) >= _RL_MAX:
+        return False
+    q.append(now)
+    return True
+
+
+@app.function_name(name="recent")
+@app.route(route="recent", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def recent(req: func.HttpRequest) -> func.HttpResponse:
+    ip = (req.headers.get("X-Forwarded-For", "unknown").split(",")[0]).strip()
+    if not _rate_ok(ip):
+        return func.HttpResponse('{"error":"rate limit exceeded"}',
+                                 status_code=429, mimetype="application/json")
+    container = cosmos_container()
+    if container is None:
+        return func.HttpResponse('{"error":"cosmos not configured"}',
+                                 status_code=503, mimetype="application/json")
+    try:
+        items = list(container.query_items(
+            query=("SELECT TOP 20 c.file_name, c.row_index, c.prediction, c.label, "
+                   "c.confidence, c.model_version, c.duration_ms, c.timestamp "
+                   "FROM c ORDER BY c.timestamp DESC"),
+            enable_cross_partition_query=True,
+        ))
+    except Exception as exc:  # noqa: BLE001
+        logging.error("recent query failed: %s", exc)
+        return func.HttpResponse(json.dumps({"error": "query failed", "detail": str(exc)[:300]}),
+                                 status_code=500, mimetype="application/json")
+    return func.HttpResponse(json.dumps(items), mimetype="application/json")
+
+
+@app.function_name(name="dashboard")
+@app.route(route="dashboard", methods=["GET"], auth_level=func.AuthLevel.ANONYMOUS)
+def dashboard(req: func.HttpRequest) -> func.HttpResponse:
+    html = (Path(__file__).parent / "dashboard.html").read_text(encoding="utf-8")
+    return func.HttpResponse(html, mimetype="text/html")
