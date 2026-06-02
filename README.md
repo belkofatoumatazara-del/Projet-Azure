@@ -3,9 +3,9 @@
 An end-to-end, event-driven, serverless ML inference pipeline on Microsoft Azure,
 built within the Azure for Students credit limit. A CSV uploaded to Blob Storage
 is automatically validated, queued, scored by a containerised ML API, persisted
-to Cosmos DB, and surfaced on a live dashboard — with full observability and CI/CD.
+to Cosmos DB, and surfaced on A live dashboard with full observability and CI/CD.
 
-> ECE Paris — 5th year — *Distributed Systems and AI* integrative project.
+> ECE Paris MSc 2 AI *Distributed Systems and AI* integrative project.
 
 ---
 
@@ -42,7 +42,7 @@ to Application Insights.
 
 - **Dataset:** UCI Wine Quality (red), ~1,599 rows, 11 numeric physicochemical
   features. Open source, < 100 MB.
-- **Task:** binary classification — *good wine* = `quality >= 7`. Binary lets the
+- **Task:** binary classification *good wine* = `quality >= 7`. Binary lets the
   model return a natural confidence score via `predict_proba`.
 - **Model:** `RandomForestClassifier` (`class_weight="balanced"` — the dataset is
   imbalanced, ~13.6% positive), exported as `model_v1.0.0.pkl`.
@@ -259,5 +259,5 @@ The subscription's policies forced several defensible design decisions:
   workflow is authored and correct but cannot run live (no `AZURE_CREDENTIALS`).
   CI runs fully.
 - **Static Web Apps regions** don't overlap the allowed list, so the dashboard is
-  served from the Function App (`/api/dashboard`) instead — same learning outcome,
+  served from the Function App (`/api/dashboard`) instead same learning outcome,
   no extra resource, no CORS.
